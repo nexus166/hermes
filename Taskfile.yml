@@ -1,0 +1,241 @@
+version: '2'
+
+expansions: 3
+vars:
+  VCS: "github.ibm.com"
+  OWNER:
+    sh: '[ -z "${OWNER}" ] && basename $(dirname "$(git rev-parse --show-toplevel 2>/dev/null)") || echo "${OWNER}"'
+  PACKAGE:
+    sh: '[ -z "${PACKAGE}" ] && basename $(pwd) || echo "$PACKAGE"'
+  PROJECT: "{{.VCS}}/{{.OWNER}}/{{.PACKAGE}}"
+  SEMVER:
+    sh: cat VERSION || git rev-parse HEAD
+  COMMIT:
+    sh: 'git rev-parse --short HEAD 2>/dev/null || echo -n "DEV"'
+  DOCKER_REGISTRY:
+    sh: '[ ! -z "${DOCKER_REGISTRY}" ] && echo -n "${DOCKER_REGISTRY}" || echo -n docker.io'
+  DOCKER_TAG:
+    sh: 'echo "$(git rev-parse --short HEAD)-$(date +%d%m%y)"'
+  DOCKERFILE: 'H4sIAAAAAAACA32RXW/TMBSGr+1fcWT1AiRcs5uqAvViarMVNnDkdHwI0OQ6bhLVS4KPs00a/e/EHlAxIe5en/Ocr9dnSr4jrb0f8GQ2E1W3dSUt1tnlJfnCxLZphcaavQDG7+3QRdE3vd3pxqWgYd8oVVfvie73oMsSOB/6UgebROV1GVXbcaNNbcFobqwPza4xI4Owa5yFqgmv4Ssld5UNwL9LDqwOocdXQgSN+8hMS3srmhaDdm467gM/AOtUNM6sfDf0wAsYIeu63vrfmQGtB74GvoppjiBin3ZwDnh1xI+K0lN1TnIl32bLzYIxupT5ZzIlbPJwLvPTzfog0BsxefiFHBj9KNXF6o36HxL9SVbGc6DszN56Pr7TmmZcXd8Cm4rJs61G2+obC8fq5wzEgF64zmiXmlB6Fr8MjdfB1I8bcr7z3c3iJRE2GIHo4I/6F9BrxLsSkk7uPYafon/NTRfQqyJT5GhXdGsllxeZui4+LK9zqTaLk9l8PqfZp1wWWXTlSf7AfgKHvoQUcgIAAA=='
+  DOCKER_SVC_PORT: 16888
+  XC_ARCH:
+    sh: '[ ! -z "${XC_ARCH}" ] && echo -n "${XC_ARCH}" || go env GOARCH'
+  XC_OS:
+    sh: '[ ! -z "${XC_OS}" ] && echo -n "${XC_OS}" || go env GOOS'
+  XC_OSARCH:
+    sh: '[ ! -z "${XC_OSARCH}" ] && echo -n "${XC_OSARCH}" || true'
+  GO111MODULE: auto
+  GOPROXY: direct
+  CGO_ENABLED:
+    sh: '[ ! -z "${CGO_ENABLED}" ] && echo -n "${CGO_ENABLED}" || go env CGO_ENABLED'
+  GO_LDFLAGS: "-s -w"
+  #GO_GCFLAGS:
+  #  sh: '[ ! -z "$(echo -n ${XC_ARCH} | grep mips)" ] && echo -n "all=-d softfloat" || true'
+
+tasks:
+
+  default:
+    deps: [dev-bin]
+    generates:
+      - ./{{.PACKAGE}}_dev.{{.XC_OS}}_{{.XC_ARCH}}
+
+  install:
+    desc: compile release and install to ~/bin
+    deps: [bin]
+    cmds:
+      - |
+        mkdir -vp ~/bin
+        mv -vf {{.PACKAGE}} ~/bin/
+    silent: true
+
+  bin:
+    desc: build a binary
+    cmds:
+      - |
+        go mod download
+        CGO_ENABLED={{.CGO_ENABLED}} \
+        XC_OSARCH={{.XC_OSARCH}} \
+        XC_ARCH={{.XC_ARCH}} \
+        GOARCH={{.XC_ARCH}} \
+        XC_OS={{.XC_OS}} \
+        GOOS={{.XC_OS}} \
+        GO111MODULE={{.GO111MODULE}} \
+        go build \
+          -ldflags="{{.GO_LDFLAGS}} -X main.semver={{.SEMVER}} -X main.commit={{.COMMIT}}" \
+          -gcflags="{{default "" .GO_GCFLAGS}}" \
+          -o "./{{.PACKAGE}}.{{.XC_OS}}_{{.XC_ARCH}}" \
+          -a -v;
+        printf '%s\t%s\n' "$(du -sh ./{{.PACKAGE}}.{{.XC_OS}}_{{.XC_ARCH}})" "$(file ./{{.PACKAGE}}.{{.XC_OS}}_{{.XC_ARCH}} | cut -d':' -f2)";
+        [ "{{.XC_OS}}_{{.XC_ARCH}}" == "$(go env GOOS)_$(go env GOARCH)" ] && cp -v ./{{.PACKAGE}}.{{.XC_OS}}_{{.XC_ARCH}} ./{{.PACKAGE}} || true
+    silent: false
+    generates:
+      - ./{{.PACKAGE}}.{{.XC_OS}}_{{.XC_ARCH}}
+
+  cgo-bin:
+    cmds:
+      - |
+        go mod download
+        CGO_ENABLED=1 \
+        XC_OSARCH={{.XC_OSARCH}} \
+        XC_ARCH={{.XC_ARCH}} \
+        GOARCH={{.XC_ARCH}} \
+        XC_OS={{.XC_OS}} \
+        GOOS={{.XC_OS}} \
+        GO111MODULE={{.GO111MODULE}} \
+        go build \
+          -ldflags="{{.GO_LDFLAGS}} -X main.semver={{.SEMVER}} -X main.commit={{.COMMIT}}" \
+          -gcflags="{{default "" .GO_GCFLAGS}}" \
+          -o "./{{.PACKAGE}}.{{.XC_OS}}_{{.XC_ARCH}}-cgo" \
+          -a -v;
+        printf '%s\t%s\n' "$(du -sh ./{{.PACKAGE}}.{{.XC_OS}}_{{.XC_ARCH}}-cgo)" "$(file ./{{.PACKAGE}}.{{.XC_OS}}_{{.XC_ARCH}}-cgo | cut -d':' -f2)";
+        [ "{{.XC_OS}}_{{.XC_ARCH}}" == "$(go env GOOS)_$(go env GOARCH)" ] && cp -v ./{{.PACKAGE}}.{{.XC_OS}}_{{.XC_ARCH}}-cgo ./{{.PACKAGE}}-cgo || true
+    silent: true
+    generates:
+      - ./{{.PACKAGE}}.{{.XC_OS}}_{{.XC_ARCH}}-cgo
+
+  dev-bin:
+    desc: build bin for local arch with debugging symbols
+    cmds:
+      - |
+        CGO_ENABLED={{.CGO_ENABLED}} \
+        GO111MODULE={{.GO111MODULE}} \
+        go build \
+          -ldflags="-X main.semver={{.SEMVER}} -X main.commit={{.COMMIT}}-DEV" \
+          -gcflags="{{default "" .GO_GCFLAGS}}" \
+          -o "./{{.PACKAGE}}_dev.{{.XC_OS}}_{{.XC_ARCH}}" \
+          -v;
+        printf '%s\t%s\n' "$(du -sh ./{{.PACKAGE}}_dev.{{.XC_OS}}_{{.XC_ARCH}})" "$(file ./{{.PACKAGE}}_dev.{{.XC_OS}}_{{.XC_ARCH}} | cut -d':' -f2)";
+        [ "{{.XC_OS}}_{{.XC_ARCH}}" == "$(go env GOOS)_$(go env GOARCH)" ] && cp -v ./{{.PACKAGE}}_dev.{{.XC_OS}}_{{.XC_ARCH}} ./{{.PACKAGE}}_dev || true
+    silent: false
+
+  dev-run:
+    deps: [dev-bin]
+    desc: run the pkg in dev mode
+    cmds:
+      - |
+        /bin/sh -xc './{{.PACKAGE}}_dev'
+
+  docker-bin:
+    desc: build bin for docker
+    cmds:
+      - |
+        CGO_ENABLED=0 \
+        GO111MODULE={{.GO111MODULE}} \
+        go build \
+          -ldflags="-s -w -X main.semver={{.SEMVER}} -X main.commit={{.COMMIT}}" \
+          -gcflags="{{default "" .GO_GCFLAGS}}" \
+          -o "./{{.PACKAGE}}.{{.XC_OS}}_{{.XC_ARCH}}" \
+          -v;
+        printf '%s\t%s\n' "$(du -sh ./{{.PACKAGE}}.{{.XC_OS}}_{{.XC_ARCH}})" "$(file ./{{.PACKAGE}}.{{.XC_OS}}_{{.XC_ARCH}} | cut -d':' -f2)";
+        [ "{{.XC_OS}}_{{.XC_ARCH}}" == "$(go env GOOS)_$(go env GOARCH)" ] && cp -v ./{{.PACKAGE}}.{{.XC_OS}}_{{.XC_ARCH}} ./{{.PACKAGE}} || true
+    silent: false
+
+  docker-run:
+    desc: run in a docker container
+    cmds:
+      - |
+        case "${INTERACTIVE}" in
+          1) docker run -P --name {{.PACKAGE}}-${TAG:-latest}-test -ti --rm {{.OWNER}}/{{.PACKAGE}}:{{.DOCKER_TAG}} -dev;;
+          *) docker run -P --name {{.PACKAGE}}-${TAG:-latest}-test -d --rm {{.OWNER}}/{{.PACKAGE}}:{{.DOCKER_TAG}} -dev;;
+        esac
+    silent: false
+
+  docker-push:
+    deps: [image]
+    desc: push container image to registry
+    cmds:
+      - |
+        docker tag {{.OWNER}}/{{.PACKAGE}}:{{.DOCKER_TAG}} {{.DOCKER_REGISTRY}}/{{.OWNER}}/{{.PACKAGE}}:{{.DOCKER_TAG}}
+        docker push {{.DOCKER_REGISTRY}}/{{.OWNER}}/{{.PACKAGE}}:{{.DOCKER_TAG}}
+
+  release:
+    desc: build bins for all supported architectures
+    cmds:
+      - |
+        task clean
+        os_archs="$(go tool dist list | tr '\n' ' ')"
+        for _a in ${os_archs}; do
+          _os="$(echo -n ${_a} | cut -d'/' -f1)"
+          _arch="$(echo -n ${_a} | cut -d'/' -f2)"
+          XC_OS="${_os}" XC_ARCH="${_arch}" task bin
+          XC_OS="${_os}" XC_ARCH="${_arch}" task cgo-bin
+        done
+        mkdir -vp ./release
+        mv -vf {{.PACKAGE}}.* ./release/
+        cd ./release
+        file ./{{.PACKAGE}}.*
+        sha256sum * | tee -a ./{{.PACKAGE}}.sums
+
+  clean:
+    desc: clean work env
+    cmds:
+      - |
+        rm -fr vendor/;
+        go clean -v -a;
+        rm -fr ~/.cache/go-build;
+        find . -not -name '*.sh' -not -path '*/\.*' -type f -executable -print -exec rm -vrf {} \; -exec git rm -r --cached {} \;
+        find . -type f -not -name '*.go' -not -name 'README.md' -not -name 'VERSION' -not -name 'LICENSE' -not -name 'go.mod' -not -name 'go.sum' -not -name '*.sh' -not -name 'Taskfile.yml' -not -path '*/\.*' -print -exec echo still potentially useless\: {} \;
+        find . -not -path '*/\.*' -type d -exec gofmt -w {} \;
+    silent: false
+
+  tidy:
+    deps: [clean]
+    desc: fmt & lint
+    cmds:
+      - |
+        gofmt -w .
+        golint ./...
+    silent: true
+
+  vet:
+    deps: [tidy]
+    desc: go why/vet/sec
+    cmds:
+      - go mod why || true
+      - go mod tidy || true
+        go mod graph || true
+      - go vet $(go list ./...)
+      - gosec -quiet ./...
+
+  image:
+    desc: build docker image
+    cmds:
+      - |
+        echo -n {{.DOCKERFILE}} | base64 --decode | gzip -dc | tee Dockerfile | \
+        docker build \
+          --rm \
+          --build-arg PROJECT={{.PROJECT}} \
+          --build-arg CGO_ENABLED={{.CGO_ENABLED}} \
+          --build-arg XC_OSARCH={{.XC_OSARCH}} \
+          --build-arg XC_ARCH={{.XC_ARCH}} \
+          --build-arg GOARCH={{.XC_ARCH}} \
+          --build-arg XC_OS={{.XC_OS}} \
+          --build-arg GOOS={{.XC_OS}} \
+          --build-arg GO111MODULE={{.GO111MODULE}} \
+          --build-arg DOCKER_SVC_PORT={{.DOCKER_SVC_PORT}} \
+          --tag {{.OWNER}}/{{.PACKAGE}}:{{.DOCKER_TAG}} \
+          -f- .;
+    silent: true
+
+  dev-image:
+    desc: build test docker image
+    cmds:
+      - |
+        GO111MODULE=on go mod vendor
+        TAG=dev-{{.COMMIT}} task image
+        rm -fr vendor/
+
+  license-headers:
+    cmds:
+      - echo 'H4sIAAAAAAACAzWQUWuDMBSF3/crDuJI7apuextlA2llE9xatBQ6ZOD0pg2tiWhaKOzH79Z1b8k5J+feL9J0kFAa7kgqXSOAb88tsebrsiGIcbA1wpuiNpD22XFHzd5S03rOFD3VnOJM2JbVvtxSOHFbAceVDn4GV4RfVysYhwpFWISYLZabLHl9W6EYVYWHx/uHJ19wcV1awt3txnME8iRdRx8LfEbvyyibJxNEaYrhWY4szuNsHc+DQg+Nqx3hoCrSPe/NPHZHfOrNsauoR1VqfF+MI+MxKLtIk1n8kceQ6kD/WmeMRa06qqzpzjCSVdVfa2A7Ip4n8HLhs0zfnOCf/i4D8uWLNN38AiXXQV1RAQAA' | base64 -d | gunzip -c | bash
+    silent: true
+
+  tome:
+    deps: [tidy]
+    cmds:
+      - gorep -from="github.ibm.com/Silvano-Zampardi1/alphard" -to="alphard" ./...
+
+  toibm:
+    deps: [tidy]
+    cmds:
+      - gorep -from="alphard" -to="github.ibm.com/Silvano-Zampardi1/alphard" ./...
